@@ -1,0 +1,156 @@
+﻿kind: DeploymentConfig
+apiVersion: apps.openshift.io/v1
+metadata:
+  annotations:
+    template.alpha.openshift.io/wait-for-ready: 'true'
+  name: apicurio-postgresql
+  namespace: service-registry
+  labels:
+    template: postgresql-persistent-template
+spec:
+  strategy:
+    type: Recreate
+    recreateParams:
+      timeoutSeconds: 600
+    resources: {}
+    activeDeadlineSeconds: 21600
+  triggers:
+    - type: ImageChange
+      imageChangeParams:
+        automatic: true
+        containerNames:
+          - postgresql
+        from:
+          kind: ImageStreamTag
+          namespace: openshift
+          name: 'postgresql:10-el8'
+        lastTriggeredImage: >-
+          image-registry.openshift-image-registry.svc:5000/openshift/postgresql@sha256:f99c12471733d56ee4255eeb69bf907fb362f8072258001019be978d7fd724dd
+    - type: ConfigChange
+  replicas: 1
+  revisionHistoryLimit: 10
+  test: false
+  selector:
+    name: apicurio-postgresql
+  template:
+    metadata:
+      labels:
+        name: apicurio-postgresql
+    spec:
+      volumes:
+        - name: apicurio-postgresql-data
+          persistentVolumeClaim:
+            claimName: apicurio-postgresql
+      containers:
+        - resources:
+            limits:
+              memory: 512Mi
+          readinessProbe:
+            exec:
+              command:
+                - /usr/libexec/check-container
+            initialDelaySeconds: 5
+            timeoutSeconds: 1
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          terminationMessagePath: /dev/termination-log
+          name: postgresql
+          livenessProbe:
+            exec:
+              command:
+                - /usr/libexec/check-container
+                - '--live'
+            initialDelaySeconds: 120
+            timeoutSeconds: 10
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          env:
+            - name: POSTGRESQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: apicurio-postgresql
+                  key: database-user
+            - name: POSTGRESQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: apicurio-postgresql
+                  key: database-password
+            - name: POSTGRESQL_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: apicurio-postgresql
+                  key: database-name
+          securityContext:
+            capabilities: {}
+            privileged: false
+          ports:
+            - containerPort: 5432
+              protocol: TCP
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: apicurio-postgresql-data
+              mountPath: /var/lib/pgsql/data
+          terminationMessagePolicy: File
+          image: >-
+            image-registry.openshift-image-registry.svc:5000/openshift/postgresql@sha256:f99c12471733d56ee4255eeb69bf907fb362f8072258001019be978d7fd724dd
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      securityContext: {}
+      schedulerName: default-scheduler
+---
+kind: Secret
+apiVersion: v1
+metadata:
+  annotations:
+    template.openshift.io/expose-database_name: '{.data[''database-name'']}'
+    template.openshift.io/expose-password: '{.data[''database-password'']}'
+    template.openshift.io/expose-username: '{.data[''database-user'']}'
+  name: apicurio-postgresql
+  namespace: service-registry
+  labels:
+    template: postgresql-persistent-template
+data:
+  database-name: cmVnaXN0cnk=
+  database-password: cG9zdGdyZXNxbA==
+  database-user: cG9zdGdyZXNxbA==
+type: Opaque
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: apicurio-postgresql
+  namespace: service-registry
+  finalizers:
+    - kubernetes.io/pvc-protection
+  labels:
+    template: postgresql-persistent-template
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: apicurio-postgresql
+  namespace: service-registry
+  labels:
+    template: postgresql-persistent-template
+spec:
+  ports:
+    - name: postgresql
+      protocol: TCP
+      port: 5432
+      targetPort: 5432
+  selector:
+    name: apicurio-postgresql
+  type: ClusterIP
+  sessionAffinity: None
+status:
+  loadBalancer: {}
+

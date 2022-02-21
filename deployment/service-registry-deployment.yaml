@@ -1,0 +1,150 @@
+﻿kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: registry-deployment
+  namespace: service-registry
+  labels:
+    app: registry
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: registry
+  template:
+    metadata:
+      labels:
+        app: registry
+    spec:
+      volumes:
+        - name: registry-keystore-secret-volume
+          secret:
+            secretName: apicurio-keystore
+            defaultMode: 420
+      containers:
+        - resources:
+            limits:
+              cpu: '1'
+              memory: 1300Mi
+            requests:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 15
+            timeoutSeconds: 5
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          terminationMessagePath: /dev/termination-log
+          name: registry
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 15
+            timeoutSeconds: 5
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          env:
+            - name: JAVA_OPTIONS
+              value: >-
+                -Dquarkus.http.ssl.certificate.key-store-file=/app/registry-keystore/registry-keystore.jks
+                -Dquarkus.http.ssl.certificate.key-store-file-type=jks
+                -Dquarkus.http.ssl.certificate.key-store-password=changeit
+                -Djavax.net.ssl.trustStore=/app/registry-keystore/cacerts.jks
+                -Djavax.net.ssl.trustStoreType=jks        
+                -Djavax.net.ssl.trustStorePassword=changeit
+            - name: REGISTRY_DATASOURCE_URL
+              value: >-
+                jdbc:postgresql://apicurio-postgresql.service-registry.svc:5432/registry
+            - name: REGISTRY_DATASOURCE_USERNAME
+              value: postgresql
+            - name: REGISTRY_DATASOURCE_PASSWORD
+              value: postgresql
+            - name: QUARKUS_PROFILE
+              value: prod
+# the following is set to false to avoid container not coming up due to incorrect KEYCLOAK_URL. You should change the KEYCLOAK_URL to match your setup and change this back to true.
+            - name: AUTH_ENABLED
+              value: 'false'
+            - name: KEYCLOAK_URL
+              value: 'https://keycloak-developer-schema-registry.apps-crc.testing/auth'
+            - name: KEYCLOAK_REALM
+              value: registry
+            - name: KEYCLOAK_API_CLIENT_ID
+              value: registry-api
+            - name: KEYCLOAK_UI_CLIENT_ID
+              value: service-registry
+            - name: ROLE_BASED_AUTHZ_ENABLED
+              value: 'true'
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+            - containerPort: 8443
+              protocol: TCP
+          imagePullPolicy: Always
+          volumeMounts:
+            - name: registry-keystore-secret-volume
+              readOnly: true
+              mountPath: /app/registry-keystore
+          terminationMessagePolicy: File
+          image: >-
+            registry.redhat.io/integration/service-registry-sql-rhel8@sha256:667fd4360994d67c0d2f148bfa6d5d6353dee33868f1497d0ffed172efe7e264
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+#      securityContext: {}
+#      schedulerName: default-scheduler
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+#  revisionHistoryLimit: 10
+#  progressDeadlineSeconds: 600
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: apicurio-service
+  namespace: service-registry
+  labels:
+    app: registry
+spec:
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8080
+      targetPort: 8080
+    - name: https
+      protocol: TCP
+      port: 8443
+      targetPort: 8443
+  selector:
+    app: registry
+  type: ClusterIP
+  sessionAffinity: None
+---
+kind: Route
+apiVersion: route.openshift.io/v1
+metadata:
+  name: apicurio-https
+  namespace: service-registry
+  labels:
+    app: registry
+spec:
+  host: apicurio-https-developer-schema-registry.apps-crc.testing
+  to:
+    kind: Service
+    name: apicurio-service
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
